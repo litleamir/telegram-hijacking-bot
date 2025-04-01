@@ -1,0 +1,12 @@
+python-telegram-bot==20.7
+python-dotenv==1.0.0
+Pillow==10.2.0
+torch
+torchvision
+numpy
+matplotlib
+tqdm
+requests==2.31.0
+flask==2.3.3
+selenium==4.15.2
+webdriver-manager==4.0.1 
