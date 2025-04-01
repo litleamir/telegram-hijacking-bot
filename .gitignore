@@ -1,1 +1,3 @@
 /.venv
+/temp_photos/*
+/telegram_cookies.pkl
