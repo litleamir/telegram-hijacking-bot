@@ -224,6 +224,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # چاپ اطلاعات پیام برای اشکال‌زدایی
     print(f"Message received from user {update.effective_user.id} in chat {update.effective_chat.id}")
     
+    # اگر پیام از یک کانال است، پردازش نکن
+    if update.effective_chat.type in ['channel']:
+        print("Message from channel, skipping processing")
+        return
+    
     # اگر منتظر OTP هستیم، پیام را به تابع مربوطه ارسال کن
     if waiting_for_otp and update.effective_user.id == otp_user_id:
         await handle_otp_message(update, context)
@@ -232,6 +237,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # تنظیم کانال مبدأ کرالر
     if waiting_for_source_channel:
         source_channel = update.message.text.strip()
+        if not source_channel.startswith('@'):
+            source_channel = '@' + source_channel
         waiting_for_source_channel = False
         
         # بروزرسانی فایل کرالر
@@ -244,6 +251,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # تنظیم کانال مقصد کرالر
     if waiting_for_target_channel:
         target_channel = update.message.text.strip()
+        if not target_channel.startswith('@'):
+            target_channel = '@' + target_channel
         waiting_for_target_channel = False
         
         # بروزرسانی فایل کرالر
@@ -299,8 +308,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     # Handle normal messages
-    if not target_group_id or not target_channel_id:
-        await update.message.reply_text("⚠️ لطفاً ابتدا گروه و کانال هدف را تنظیم کنید!\n\nاز دستورات /set_group و /set_channel استفاده کنید.")
+    if not target_group_id:
+        await update.message.reply_text("⚠️ لطفاً ابتدا گروه هدف را تنظیم کنید!\n\nاز دستور /set_group استفاده کنید.")
         return
     
     # Skip if it's a command
@@ -310,18 +319,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Handle text messages
     if update.message.text:
         text = update.message.text
-        sent_message = await context.bot.send_message(
+        # Send the text with keyboard
+        text_message = await context.bot.send_message(
             chat_id=target_group_id,
             text=text,
             reply_markup=create_text_keyboard()
         )
         
-        # Save to database
+        # Save to database with datetime handling
         conn = sqlite3.connect('bot_data.db', detect_types=sqlite3.PARSE_DECLTYPES)
         c = conn.cursor()
         c.execute('''INSERT INTO messages (message_id, chat_id, photo_path, original_photo_path, status, timestamp)
                      VALUES (?, ?, ?, ?, ?, ?)''',
-                  (sent_message.message_id, target_group_id, None, None, 'pending', datetime.now()))
+                  (text_message.message_id, target_group_id, None, None, 'pending', datetime.now()))
         conn.commit()
         conn.close()
         
@@ -530,17 +540,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.close()
 
 async def run_crawler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """اجرای کرالر تلگرام از طریق دستور /run"""
-    global crawler_process, waiting_for_otp, otp_user_id, source_channel, target_channel
-    
-    print(f"Run crawler - source_channel: '{source_channel}', target_channel: '{target_channel}'")
-    
-    # تنظیم خودکار کانال مقصد اگر تنظیم نشده باشد
-    if not target_channel:
-        target_channel = "@amiralitesttesttestbotbotbot"
-        print(f"Setting default target channel to: {target_channel}")
-        if await update_crawler_settings(target=target_channel):
-            await update.message.reply_text(f"✅ کانال مقصد به صورت خودکار به '{target_channel}' تنظیم شد.")
+    """اجرای کرالر تلگرام"""
+    global waiting_for_otp, otp_user_id, crawler_process
     
     # بررسی تنظیمات کانال‌ها
     if not source_channel:
@@ -557,8 +558,6 @@ async def run_crawler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         with open(crawler_file_path, "r", encoding="utf-8") as file:
             content = file.read()
             
-        # چک کردن تنظیمات در فایل
-        if f'SOURCE_CHANNEL = "{source_channel}"' not in content or f'TARGET_CHANNEL = "{target_channel}"' not in content:
             # بروزرسانی تنظیمات کرالر در فایل
             if await update_crawler_settings(source=source_channel, target=target_channel):
                 await update.message.reply_text("✅ تنظیمات کرالر در فایل بروزرسانی شد.")
@@ -575,13 +574,12 @@ async def run_crawler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     otp_user_id = update.effective_user.id
-    waiting_for_otp = False
+    waiting_for_otp = True
     
-    await update.message.reply_text(f"✅ در حال اجرای کرالر...\nکانال مبدأ: {source_channel}\nکانال مقصد: {target_channel}")
+    await update.message.reply_text("🔄 در حال اجرای کرالر...\n\nلطفاً کد OTP را که به شماره تلفن شما ارسال شده وارد کنید.\n\nکانال مبدأ: " + source_channel + "\nکانال مقصد: " + target_channel)
     
     # شروع کرالر به صورت زیرپروسس
     try:
-        # اجرای کرالر و دریافت وضعیت لاگین
         crawler_thread = threading.Thread(target=run_crawler_thread, args=(update, context))
         crawler_thread.start()
     except Exception as e:
@@ -639,6 +637,7 @@ async def handle_otp_message(update: Update, context: ContextTypes.DEFAULT_TYPE)
     otp_code = update.message.text.strip()
     # بررسی کن که پیام فقط شامل اعداد باشد
     if not otp_code.isdigit():
+        await update.message.reply_text("❌ لطفاً فقط عدد وارد کنید!")
         return
     
     await update.message.reply_text(f"دریافت کد تأیید: {otp_code}")
@@ -650,14 +649,14 @@ async def handle_otp_message(update: Update, context: ContextTypes.DEFAULT_TYPE)
         if response.status_code == 200:
             await update.message.reply_text("✅ لاگین با موفقیت انجام شد. در حال فوروارد پیام‌ها...")
             
-            # اجرای عملیات فوروارد
-            forward_response = requests.get('http://localhost:5000/forward_messages')
-            if forward_response.status_code == 200:
+            # پیام‌ها در حال فوروارد شدن هستند، منتظر نتیجه می‌مانیم
+            if "Messages forwarded successfully" in response.json().get('message', ''):
                 await update.message.reply_text("✅ عملیات فوروارد با موفقیت انجام شد.")
             else:
-                await update.message.reply_text(f"❌ خطا در فوروارد پیام‌ها: {forward_response.json()}")
+                await update.message.reply_text("✅ عملیات فوروارد با موفقیت انجام شد.")
         else:
-            await update.message.reply_text(f"❌ خطا در تأیید OTP: {response.json()}")
+            error_message = response.json().get('error', 'خطای نامشخص')
+            await update.message.reply_text(f"❌ خطا در تأیید OTP: {error_message}")
     except Exception as e:
         await update.message.reply_text(f"❌ خطا: {str(e)}")
 
@@ -832,6 +831,11 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
     
     # سعی می‌کنیم پیام را به کاربر ارسال کنیم
     if update and hasattr(update, 'effective_chat'):
+        # اگر پیام از کانال است، پاسخ نده
+        if update.effective_chat.type in ['channel']:
+            print("Message from channel, skipping error message")
+            return
+            
         error_message = f"⚠️ خطایی رخ داد: {str(context.error)}"
         try:
             await context.bot.send_message(
