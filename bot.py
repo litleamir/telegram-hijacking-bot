@@ -627,7 +627,7 @@ def run_crawler_thread(update, context):
 
 
 async def handle_otp_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """پردازش کد OTP ارسال شده توسط کاربر"""
+    """Handle OTP verification message"""
     global waiting_for_otp, otp_user_id
     
     # اگر منتظر OTP نیستیم یا کاربر متفاوت است، پردازش نکن
@@ -641,19 +641,31 @@ async def handle_otp_message(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
     
     await update.message.reply_text(f"دریافت کد تأیید: {otp_code}")
-    waiting_for_otp = False
     
     try:
         # ارسال OTP به کرالر
         response = requests.get(f'http://localhost:5000/verify_otp?otp={otp_code}')
         if response.status_code == 200:
-            await update.message.reply_text("✅ لاگین با موفقیت انجام شد. در حال فوروارد پیام‌ها...")
-            
-            # پیام‌ها در حال فوروارد شدن هستند، منتظر نتیجه می‌مانیم
-            if "Messages forwarded successfully" in response.json().get('message', ''):
-                await update.message.reply_text("✅ عملیات فوروارد با موفقیت انجام شد.")
-            else:
-                await update.message.reply_text("✅ عملیات فوروارد با موفقیت انجام شد.")
+            result = response.json()
+            if result.get('status') == 'error':
+                # اگر کد اشتباه بود، پیام خطا را نمایش بده و منتظر کد جدید بمان
+                await update.message.reply_text(result.get('message', 'کد تأیید اشتباه است. لطفاً دوباره تلاش کنید.'))
+                return
+            elif result.get('status') == 'info':
+                # اگر پیام خوانده نشده‌ای وجود نداشت
+                await update.message.reply_text(result.get('message', 'تمام پیام‌ها خوانده شده‌اند.'))
+                waiting_for_otp = False
+                return
+            elif result.get('status') == 'success':
+                # اگر کد درست بود، پیام موفقیت را نمایش بده و ادامه بده
+                await update.message.reply_text(result.get('message', 'ورود با موفقیت انجام شد. در حال فوروارد پیام‌ها...'))
+                waiting_for_otp = False
+                
+                # پیام‌ها در حال فوروارد شدن هستند، منتظر نتیجه می‌مانیم
+                if "Messages forwarded successfully" in result.get('message', ''):
+                    await update.message.reply_text("✅ عملیات فوروارد با موفقیت انجام شد.")
+                else:
+                    await update.message.reply_text("✅ عملیات فوروارد با موفقیت انجام شد.")
         else:
             error_message = response.json().get('error', 'خطای نامشخص')
             await update.message.reply_text(f"❌ خطا در تأیید OTP: {error_message}")
