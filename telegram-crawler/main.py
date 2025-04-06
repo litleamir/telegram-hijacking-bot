@@ -38,7 +38,8 @@ def initialize_driver():
             print(f"[+] Using ChromeDriver at: {chromedriver_path}")
             service = Service(executable_path=chromedriver_path)
             options = webdriver.ChromeOptions()
-            options.add_argument("--headless=new")  # Use new headless mode
+            # Re-enable headless mode
+            options.add_argument("--headless=new")
             options.add_argument("--disable-gpu")
             options.add_argument("--no-sandbox")
             options.add_argument("--disable-dev-shm-usage")
@@ -46,7 +47,7 @@ def initialize_driver():
             options.add_argument("--disable-software-rasterizer")
             options.add_argument("--ignore-certificate-errors")
             options.add_argument("--disable-notifications")
-            options.add_argument("--window-size=1920,1080")  # Set a standard window size
+            options.add_argument("--window-size=1920,1080")
             options.add_argument("--remote-debugging-port=9222")
             
             print("[+] Creating Chrome driver...")
@@ -269,146 +270,175 @@ def verify_otp():
     if not otp_code:
         return jsonify({'error': 'OTP is required! Use: /verify_otp?otp=CODE'}), 400
 
+    if driver is None:
+        return jsonify({'error': 'Driver not initialized'}), 500
+
     try:
         print(f"[+] Entering OTP: {otp_code}")
         otp_input = WebDriverWait(driver, 10).until(
             EC.element_to_be_clickable((By.XPATH, "//input[@id='sign-in-code']"))
         )
+        otp_input.clear()
         otp_input.send_keys(otp_code)
-        time.sleep(2)
-        save_cookies(driver, COOKIES_FILE_PATH)
-        print("[+] Successfully logged in!")
-
-        # Continue with message forwarding
-        print("[+] Starting message forwarding process...")
-        search_input = WebDriverWait(driver, 10).until(
-            EC.element_to_be_clickable((By.XPATH, "//input[@id='telegram-search-input']"))
-        )
-        search_input.click()
-        search_input.clear()
-        search_input.send_keys(SOURCE_CHANNEL)
-        print(f"[+] Searching for source channel: {SOURCE_CHANNEL}")
-
-        first_item = WebDriverWait(driver, 10).until(
-            EC.presence_of_element_located(
-                (By.XPATH, "(//div[contains(@class, 'ChatInfo')])[1]"))
-        )
-        ActionChains(driver).move_to_element(first_item).click().perform()
-        print(f"[+] Channel {SOURCE_CHANNEL} opened")
-
+        
+        # Wait for either success or error message
         try:
-            unread_divider = WebDriverWait(driver, 10).until(
-                EC.presence_of_element_located((By.XPATH, "//div[@class='unread-divider local-action-message']"))
+            # Check for error message (invalid code)
+            error_message = WebDriverWait(driver, 5).until(
+                EC.presence_of_element_located((By.XPATH, "//input[contains(@aria-label, 'Invalid code, please try again')]"))
             )
-            print("✅ unread divider found")
-
-            # Scroll to unread divider once
-            driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", unread_divider)
-            time.sleep(1)
-
-            # Find the first message after unread divider
-            first_message = unread_divider.find_element(By.XPATH, "./following::div[contains(@class, 'Message')][1]")
-            print("✅ first message found")
-
-            # Right click on first message to open context menu
-            ActionChains(driver).context_click(first_message).perform()
-            time.sleep(0.5)
-
-            # Click Select option
-            select_button = WebDriverWait(driver, 10).until(
-                EC.element_to_be_clickable(
-                    (By.XPATH, "//div[@class='MenuItem compact' and text()='Select']")
-                )
-            )
-            select_button.click()
-            time.sleep(0.5)
-
-            # Get all unread messages after the divider
-            messages = driver.find_elements(By.XPATH, 
-                "//div[@class='unread-divider local-action-message']/following::div[contains(@class, 'Message') and contains(@class, 'message-list-item') and not(contains(@class, 'is-selected')) and not(contains(@class, 'message-date-group'))]")
-            
-            print(f"[+] Found {len(messages)} messages to select")
-            
-            # Select messages in small batches
-            batch_size = 3
-            selected_count = 0
-            
-            for i in range(0, len(messages), batch_size):
-                batch = messages[i:i + batch_size]
-                for msg in batch:
-                    try:
-                        # Check if message is already selected and is a valid message
-                        msg_class = msg.get_attribute('class')
-                        if msg_class and 'is-selected' not in msg_class and 'message-list-item' in msg_class:
-                            # Scroll message into view smoothly
-                            driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", msg)
-                            time.sleep(0.2)
-                            
-                            # Click the message
-                            ActionChains(driver).move_to_element(msg).click().perform()
-                            selected_count += 1
-                            
-                            # If we've selected all messages, break
-                            if selected_count >= len(messages):
-                                break
-                    except Exception as e:
-                        print(f"[!] Could not select message: {str(e)}")
-                        continue
-                
-                # If we've selected all messages, break
-                if selected_count >= len(messages):
-                    break
-
-            print(f"[+] Selected {selected_count} messages")
-
-        except Exception as e:
-            print(f"[X] خطا در انتخاب پیام‌ها: {str(e)}")
-
-        try:
-            # Try to find and click cancel button if it exists
+            if error_message and "Invalid code" in error_message.text:
+                print("[!] Invalid OTP code")
+                return jsonify({"status": "error", "message": "کد تأیید اشتباه است. لطفاً کد صحیح را وارد کنید."})
+        except:
+            # If no error message, check for success
             try:
-                cancel_button = WebDriverWait(driver, 3).until(
-                    EC.element_to_be_clickable((By.XPATH, "//button[@type='button' and text()='Cancel']"))
+                # Wait for the main page to load (indicating successful login)
+                WebDriverWait(driver, 10).until(
+                    EC.presence_of_element_located((By.XPATH, "//div[contains(@id, 'Main')]"))
                 )
-                cancel_button.click()
-                print("[+] Clicked cancel button")
-            except:
-                print("[!] No cancel button found, continuing...")  
-            # Find and click forward button
-            time.sleep(0.5)
-            forward_button = WebDriverWait(driver, 10).until(
-                EC.element_to_be_clickable(
-                    (By.XPATH, "//div[@role='button' and @title='Forward Messages' and not(contains(@class, 'copy'))]"))
-            )
-            forward_button.click()
-            time.sleep(1)  # Wait for forward dialog
-            
-            # Search for target channel
-            search_input = WebDriverWait(driver, 10).until(
-                EC.element_to_be_clickable((By.XPATH, "//input[@class='form-control']"))
-            )
-            search_input.send_keys(f"{TARGET_CHANNEL}")
-            time.sleep(1)  # Wait for search results
-            
-            # Click first result
-            first_result = WebDriverWait(driver, 10).until(
-                EC.element_to_be_clickable((By.XPATH, "//div[@class='ripple-container']"))
-            )
-            first_result.click()
-            time.sleep(1)  # Wait for selection
-            
-            # Click send button
-            send_button = WebDriverWait(driver, 10).until(
-                EC.element_to_be_clickable((By.XPATH, "//button[contains(@class, 'send') and contains(@class, 'Button')]"))
-            )
-            send_button.click()
-            time.sleep(2)  # Wait for forwarding to complete
-            driver.quit()
-            return jsonify({'success': 'Messages forwarded successfully!'}), 200
+                print("[+] OTP verification successful")
+                
+                # Continue with message forwarding
+                print("[+] Starting message forwarding process...")
+                search_input = WebDriverWait(driver, 10).until(
+                    EC.element_to_be_clickable((By.XPATH, "//input[@id='telegram-search-input']"))
+                )
+                search_input.click()
+                search_input.clear()
+                search_input.send_keys(SOURCE_CHANNEL)
+                print(f"[+] Searching for source channel: {SOURCE_CHANNEL}")
 
-        except Exception as e:
-            print(f"[X] خطا در فوروارد پیام‌ها: {str(e)}")
-            return jsonify({'error': f'Error forwarding messages: {str(e)}'}), 500
+                first_item = WebDriverWait(driver, 10).until(
+                    EC.presence_of_element_located(
+                        (By.XPATH, "(//div[contains(@class, 'ChatInfo')])[1]"))
+                )
+                ActionChains(driver).move_to_element(first_item).click().perform()
+                print(f"[+] Channel {SOURCE_CHANNEL} opened")
+
+                
+                unread_divider = WebDriverWait(driver, 10).until(
+                    EC.presence_of_element_located((By.XPATH, "//div[@class='unread-divider local-action-message']"))
+                )
+                print("✅ unread divider found")
+
+                # Scroll to unread divider once
+                driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", unread_divider)
+                time.sleep(1)
+
+                # Find the first message after unread divider
+                first_message = unread_divider.find_element(By.XPATH, "./following::div[contains(@class, 'Message')][1]")
+                print("✅ first message found")
+
+                # Right click on first message to open context menu
+                ActionChains(driver).context_click(first_message).perform()
+                time.sleep(0.5)
+
+                # Click Select option
+                select_button = WebDriverWait(driver, 10).until(
+                    EC.element_to_be_clickable(
+                        (By.XPATH, "//div[@class='MenuItem compact' and text()='Select']")
+                    )
+                )
+                select_button.click()
+                time.sleep(0.5)
+
+                # Get all unread messages after the divider
+                messages = driver.find_elements(By.XPATH, 
+                    "//div[@class='unread-divider local-action-message']/following::div[contains(@class, 'Message') and contains(@class, 'message-list-item') and not(contains(@class, 'is-selected')) and not(contains(@class, 'message-date-group'))]")
+                
+                if not messages:
+                    print("[!] No unread messages found after divider")
+                    driver.quit()
+                    return jsonify({
+                        'status': 'info',
+                        'message': '✅ تمام پیام‌های کانال خوانده شده‌اند. پیام جدیدی برای فوروارد وجود ندارد.'
+                    })
+                
+                print(f"[+] Found {len(messages)} messages to select")
+                
+                # Select messages in small batches
+                batch_size = 3
+                selected_count = 0
+                
+                for i in range(0, len(messages), batch_size):
+                    batch = messages[i:i + batch_size]
+                    for msg in batch:
+                        try:
+                            # Check if message is already selected and is a valid message
+                            msg_class = msg.get_attribute('class')
+                            if msg_class and 'is-selected' not in msg_class and 'message-list-item' in msg_class:
+                                # Scroll message into view smoothly
+                                driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", msg)
+                                time.sleep(0.2)
+                                
+                                # Click the message
+                                ActionChains(driver).move_to_element(msg).click().perform()
+                                selected_count += 1
+                                
+                                # If we've selected all messages, break
+                                if selected_count >= len(messages):
+                                    break
+                        except Exception as e:
+                            print(f"[!] Could not select message: {str(e)}")
+                            continue
+                    
+                    # If we've selected all messages, break
+                    if selected_count >= len(messages):
+                        break
+
+                print(f"[+] Selected {selected_count} messages")
+
+                # Try to find and click cancel button if it exists
+                try:
+                    cancel_button = WebDriverWait(driver, 3).until(
+                        EC.element_to_be_clickable((By.XPATH, "//button[@type='button' and text()='Cancel']"))
+                    )
+                    cancel_button.click()
+                    print("[+] Clicked cancel button")
+                except:
+                    print("[!] No cancel button found, continuing...")  
+
+                # Find and click forward button
+                time.sleep(0.5)
+                forward_button = WebDriverWait(driver, 10).until(
+                    EC.element_to_be_clickable(
+                        (By.XPATH, "//div[@role='button' and @title='Forward Messages' and not(contains(@class, 'copy'))]"))
+                )
+                forward_button.click()
+                time.sleep(1)  # Wait for forward dialog
+
+                # Search for target channel
+                search_input = WebDriverWait(driver, 10).until(
+                    EC.element_to_be_clickable((By.XPATH, "//input[@class='form-control']"))
+                )
+                search_input.send_keys(f"{TARGET_CHANNEL}")
+                time.sleep(1)  # Wait for search results
+
+                # Click first result
+                first_result = WebDriverWait(driver, 10).until(
+                    EC.element_to_be_clickable((By.XPATH, "//div[@class='ripple-container']"))
+                )
+                first_result.click()
+                time.sleep(1)  # Wait for selection
+
+                # Click send button
+                send_button = WebDriverWait(driver, 10).until(
+                    EC.element_to_be_clickable((By.XPATH, "//button[contains(@class, 'send') and contains(@class, 'Button')]"))
+                )
+                send_button.click()
+                time.sleep(2)  # Wait for forwarding to complete
+                driver.quit()
+                return jsonify({'success': 'Messages forwarded successfully!'}), 200
+
+            except Exception as e:
+                print(f"[!] No unread messages found: {str(e)}")
+                driver.quit()
+                return jsonify({
+                    'status': 'info',
+                    'message': '✅ تمام پیام‌های کانال خوانده شده‌اند. پیام جدیدی برای فوروارد وجود ندارد.'
+                })
+        
 
     except Exception as e:
         print(f"[X] Error: {str(e)}")
