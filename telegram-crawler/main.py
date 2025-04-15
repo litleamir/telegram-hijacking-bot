@@ -39,8 +39,8 @@ def initialize_driver():
             print(f"[+] Using ChromeDriver at: {chromedriver_path}")
             service = Service(executable_path=chromedriver_path)
             options = webdriver.ChromeOptions()
-            # Disable headless mode for debugging
-            # options.add_argument("--headless=new")
+            # Enable headless mode
+            options.add_argument("--headless=new")
             options.add_argument("--disable-gpu")
             options.add_argument("--no-sandbox")
             options.add_argument("--disable-dev-shm-usage")
@@ -273,14 +273,14 @@ def verify_otp():
     global driver, current_source_index
     
     if not SOURCE_CHANNELS:
-        return jsonify({'error': 'No source channels configured'}), 400
+        return jsonify({'error': 'No source channels configured'})
         
     otp_code = request.args.get('otp')
     if not otp_code:
-        return jsonify({'error': 'OTP is required! Use: /verify_otp?otp=CODE'}), 400
+        return jsonify({'error': 'OTP is required! Use: /verify_otp?otp=CODE'})
 
     if driver is None:
-        return jsonify({'error': 'Driver not initialized'}), 500
+        return jsonify({'error': 'Driver not initialized'})
 
     try:
         print(f"[+] Entering OTP: {otp_code}")
@@ -381,7 +381,7 @@ def verify_otp():
         print(f"[X] Error: {str(e)}")
         if driver:
             driver.quit()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': str(e)})
 
 
 def process_messages_for_channel(driver, source_channel):
