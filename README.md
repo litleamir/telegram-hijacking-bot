@@ -1,42 +1,72 @@
-# Telegram Hijack Bot
+# Telegram Channel Management Bot
 
-این بات تلگرام برای ارسال محتوای کانال‌ها به چنل هدف و پاکسازی لینک‌های کانال از متن‌ها استفاده می‌شود.
+A Telegram bot for managing and forwarding messages between channels and groups.
 
-## ویژگی‌ها
+## Features
 
-- ارسال عکس‌ها به API (بعد از دریافت API endpoint)
-- ارسال پاسخ API به چنل هدف
-- پاکسازی لینک‌های کانال از متن‌ها و کپشن‌های عکس و فیلم
-- تشخیص خودکار چنل هدف با دستور /startHBot
+- Set target group and channel
+- Add multiple target channels
+- Forward messages from source to target channels
+- Handle photos and videos with watermark removal
+- OTP verification for secure access
+- Status monitoring and management
 
-## نصب و راه‌اندازی
+## Requirements
 
-1. نصب وابستگی‌ها:
+- Python 3.8+
+- Telegram Bot Token
+- Required Python packages (see requirements.txt)
+
+## Installation
+
+1. Clone the repository:
+```bash
+git clone https://github.com/yourusername/telegram-hijacking-bot.git
+cd telegram-hijacking-bot
+```
+
+2. Create and activate a virtual environment:
+```bash
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+```
+
+3. Install dependencies:
 ```bash
 pip install -r requirements.txt
 ```
 
-2. کپی فایل `.env.example` به `.env` و قرار دادن توکن بات:
-```bash
-cp .env.example .env
+4. Create a `.env` file and add your bot token:
+```
+TELEGRAM_BOT_TOKEN=your_bot_token_here
 ```
 
-3. ویرایش فایل `.env` و قرار دادن توکن بات تلگرام
+## Usage
 
-4. اجرای بات:
+1. Start the bot:
 ```bash
 python bot.py
 ```
 
-## نحوه استفاده
+2. Available commands:
+- `/start` - Start the bot and see available commands
+- `/set_group` - Set target group
+- `/set_channel` - Set target channel
+- `/set_phone` - Set phone number for crawler
+- `/add_target` - Add a new target channel
+- `/remove_target` - Remove a target channel
+- `/list_targets` - List all target channels
+- `/status` - Show current status
+- `/start_crawler` - Start the crawler
+- `/stop_crawler` - Stop the crawler
+- `/help` - Show help message
 
-1. بات را به چنل مورد نظر اضافه کنید
-2. دستور `/startHBot` را در چنل ارسال کنید
-3. بات به طور خودکار چنل را به عنوان چنل هدف ذخیره می‌کند
-4. هر محتوایی که در چنل‌های دیگر ارسال شود، با پاکسازی لینک‌ها به چنل هدف ارسال می‌شود
+## Security Notes
 
-## نکات مهم
+- Never share your bot token or phone number
+- Keep your `.env` file secure
+- The bot requires admin privileges in the target group
 
-- بات باید در چنل هدف ادمین باشد
-- API endpoint هنوز اضافه نشده است و باید بعداً اضافه شود
-- لینک‌های کانال به صورت خودکار از متن‌ها و کپشن‌ها حذف می‌شوند 
+## License
+
+This project is licensed under the MIT License - see the LICENSE file for details. 
