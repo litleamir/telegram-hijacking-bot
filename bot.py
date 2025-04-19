@@ -242,6 +242,15 @@ def create_unit_keyboard():
     if row:
         keyboard.append(row)
     return InlineKeyboardMarkup(keyboard)
+def has_links(text):
+    """Check if the text contains any links or usernames"""
+    patterns = [
+        r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+',
+        r't\.me/[a-zA-Z0-9_]+',
+        r'@[a-zA-Z0-9_]+'
+    ]
+    return any(re.search(p, text) for p in patterns)
+
 
 def remove_links_from_text(text):
     """Remove all links from text"""
@@ -519,8 +528,16 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     elif query.data == "remove_links":
         # Get current caption or text
+        
+        
         caption = query.message.caption or query.message.text or ""
         # Remove links
+           # اگه لینکی وجود نداره، پیغام بده و کاری نکن
+        if not has_links(caption):
+            await query.answer("لینکی برای حذف وجود نداشت.")
+            return
+
+        
         new_caption = remove_links_from_text(caption)
         
         # Update message with new caption/text
