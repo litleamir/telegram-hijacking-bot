@@ -31,7 +31,7 @@ def initialize_driver():
     if driver is None:
         print("[+] Initializing WebDriver...")
         try:
-            chromedriver_path = r"D:\python\project\telegram-hijacking-bot\telegram-crawler\chromedriver-win64\chromedriver-win64\chromedriver.exe"
+            chromedriver_path = r"chromedriver-win64\chromedriver-win64\chromedriver.exe"
             if not os.path.exists(chromedriver_path):
                 print(f"[X] ChromeDriver not found at: {chromedriver_path}")
                 return None
