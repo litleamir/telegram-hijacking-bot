@@ -16,8 +16,10 @@ import re
 # Load environment variables
 load_dotenv()
 
-# Get bot token from environment variable
-TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
+# Get bot token from environment variable and validate it
+TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '')  # Default to empty string instead of None
+if not TOKEN:
+    raise ValueError("Bot token not found in environment variables!")
 
 # Store the target group and channel IDs
 target_group_id = None
@@ -30,11 +32,12 @@ waiting_for_otp = False
 otp_user_id = None
 waiting_for_source_channel = False
 waiting_for_target_channel = False
-source_channel = None
+waiting_for_phone_number = False
+source_channels = []  # لیست کانال‌های مبدأ
 target_channel = None
 
 # Initialize SQLite database
-def init_db():
+def init_db(): 
     conn = sqlite3.connect('bot_data.db')
     c = conn.cursor()
     
@@ -65,6 +68,10 @@ if not os.path.exists(TEMP_DIR):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /start command"""
+    if not update or not update.message:
+        print("Error: Invalid update object in start command")
+        return
+        
     welcome_message = [
         "👋 سلام به ربات مدیریت کانال خوش آمدید!",
         "",
@@ -74,8 +81,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "2️⃣ سپس دستور /set_channel را بزنید و یک پیام از کانال هدف فوروارد کنید.",
         "",
         "📢 برای مدیریت کرالر از دستورات زیر استفاده کنید:",
-        "• /set_source_channel - تنظیم کانال مبدأ",
-        "• /set_target_channel - تنظیم کانال مقصد (به صورت پیش‌فرض همین ربات)",
+        "• /set_phone_number - تنظیم شماره تلفن برای کرالر",
+        "• /set_source_channel - تنظیم کانال‌های مبدأ (می‌توانید چند کانال اضافه کنید)",
+        "• /done - اتمام لیست کانال‌های مبدأ",
+        "• /set_target_channel - تنظیم کانال مقصد (به صورت پیش‌فرض ربات فعلی)",
         "• /run - اجرای کرالر",
         "",
         "🔍 دستورات مفید:",
@@ -127,14 +136,52 @@ async def set_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     waiting_for_channel = True
     await update.message.reply_text("🔄 لطفاً یک پیام از کانال مورد نظر را فوروارد کنید.\n\n⚠️ توجه: ربات باید در کانال مورد نظر عضو باشد تا بتواند پیام‌ها را ارسال کند.")
 
+async def set_phone_number(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """تنظیم شماره تلفن برای کرالر"""
+    global waiting_for_phone_number
+    waiting_for_phone_number = True
+    await update.message.reply_text("لطفاً شماره تلفن را وارد کنید (بدون کد کشور، مثال: 9128517225)")
+
 async def set_source_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """تنظیم کانال مبدأ برای کرالر"""
+    if not update or not update.message:
+        print("Error: Invalid update object in set_source_channel command")
+        return
+        
     global waiting_for_source_channel
     waiting_for_source_channel = True
-    await update.message.reply_text("لطفاً نام کانال مبدأ را وارد کنید (مثال: @BINNER_IRAN)")
+    await update.message.reply_text("لطفاً نام کانال مبدأ را وارد کنید (مثال: @BINNER_IRAN)\nبرای اتمام لیست کانال‌ها، دستور /done را ارسال کنید.")
+
+async def done_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """اتمام لیست کانال‌های مبدأ و بروزرسانی تنظیمات کرالر"""
+    if not update or not update.message:
+        print("Error: Invalid update object in done_command")
+        return
+        
+    global waiting_for_source_channel, source_channels
+    
+    if not waiting_for_source_channel:
+        await update.message.reply_text("⚠️ این دستور فقط پس از شروع تنظیم کانال‌های مبدأ قابل استفاده است.\n\nبرای تنظیم کانال‌های مبدأ از دستور /set_source_channel استفاده کنید.")
+        return
+    
+    if not source_channels:
+        await update.message.reply_text("⚠️ هیچ کانال مبدأیی اضافه نشده است!\n\nلطفاً حداقل یک کانال اضافه کنید.")
+        return
+    
+    waiting_for_source_channel = False
+    
+    # بروزرسانی فایل کرالر با لیست کانال‌های مبدأ
+    if await update_crawler_settings(source=source_channels):
+        await update.message.reply_text(f"✅ لیست کانال‌های مبدأ با موفقیت ذخیره شد:\n\n" + "\n".join(source_channels))
+    else:
+        await update.message.reply_text("❌ خطا در بروزرسانی تنظیمات کرالر!")
 
 async def set_target_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """تنظیم کانال مقصد برای کرالر"""
+    if not update or not update.message:
+        print("Error: Invalid update object in set_target_channel command")
+        return
+        
     global waiting_for_target_channel, target_channel
     
     # تنظیم مستقیم آیدی ربات به عنوان کانال مقصد کرالر
@@ -145,6 +192,7 @@ async def set_target_channel(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.message.reply_text(f"✅ کانال مقصد کرالر با موفقیت به '{target_channel}' تنظیم شد.")
     else:
         await update.message.reply_text("❌ خطا در بروزرسانی تنظیمات کرالر!")
+        return
 
 def create_main_keyboard():
     """Create the main inline keyboard with three buttons"""
@@ -194,6 +242,15 @@ def create_unit_keyboard():
     if row:
         keyboard.append(row)
     return InlineKeyboardMarkup(keyboard)
+def has_links(text):
+    """Check if the text contains any links or usernames"""
+    patterns = [
+        r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+',
+        r't\.me/[a-zA-Z0-9_]+',
+        r'@[a-zA-Z0-9_]+'
+    ]
+    return any(re.search(p, text) for p in patterns)
+
 
 def remove_links_from_text(text):
     """Remove all links from text"""
@@ -219,7 +276,11 @@ def remove_links_from_text(text):
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle all messages except commands"""
-    global target_channel_id, waiting_for_channel, waiting_for_otp, waiting_for_source_channel, waiting_for_target_channel, source_channel, target_channel
+    if not update or not update.message or not update.effective_user or not update.effective_chat:
+        print("Error: Invalid update object in handle_message")
+        return
+        
+    global target_channel_id, waiting_for_channel, waiting_for_otp, waiting_for_source_channel, waiting_for_target_channel, waiting_for_phone_number, source_channels, target_channel
     
     # چاپ اطلاعات پیام برای اشکال‌زدایی
     print(f"Message received from user {update.effective_user.id} in chat {update.effective_chat.id}")
@@ -234,18 +295,32 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await handle_otp_message(update, context)
         return
     
-    # تنظیم کانال مبدأ کرالر
-    if waiting_for_source_channel:
-        source_channel = update.message.text.strip()
-        if not source_channel.startswith('@'):
-            source_channel = '@' + source_channel
-        waiting_for_source_channel = False
-        
+    # تنظیم شماره تلفن
+    if waiting_for_phone_number:
+        phone_number = update.message.text.strip()
+        if not phone_number.isdigit():
+            await update.message.reply_text("❌ لطفاً فقط عدد وارد کنید!")
+            return
+            
         # بروزرسانی فایل کرالر
-        if await update_crawler_settings(source=source_channel):
-            await update.message.reply_text(f"✅ کانال مبدأ با موفقیت به '{source_channel}' تغییر یافت.")
+        if await update_crawler_settings(phone=phone_number):
+            await update.message.reply_text(f"✅ شماره تلفن با موفقیت به '{phone_number}' تغییر یافت.")
         else:
             await update.message.reply_text("❌ خطا در بروزرسانی تنظیمات کرالر!")
+        waiting_for_phone_number = False
+        return
+    
+    # تنظیم کانال مبدأ کرالر
+    if waiting_for_source_channel:
+        channel = update.message.text.strip()
+        if not channel.startswith('@'):
+            channel = '@' + channel
+            
+        if channel not in source_channels:
+            source_channels.append(channel)
+            await update.message.reply_text(f"✅ کانال '{channel}' به لیست کانال‌های مبدأ اضافه شد.\nبرای اتمام لیست، دستور /done را ارسال کنید.")
+        else:
+            await update.message.reply_text(f"⚠️ کانال '{channel}' قبلاً اضافه شده است.\nبرای اتمام لیست، دستور /done را ارسال کنید.")
         return
     
     # تنظیم کانال مقصد کرالر
@@ -453,8 +528,16 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     elif query.data == "remove_links":
         # Get current caption or text
+        
+        
         caption = query.message.caption or query.message.text or ""
         # Remove links
+           # اگه لینکی وجود نداره، پیغام بده و کاری نکن
+        if not has_links(caption):
+            await query.answer("لینکی برای حذف وجود نداشت.")
+            return
+
+        
         new_caption = remove_links_from_text(caption)
         
         # Update message with new caption/text
@@ -544,8 +627,8 @@ async def run_crawler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global waiting_for_otp, otp_user_id, crawler_process
     
     # بررسی تنظیمات کانال‌ها
-    if not source_channel:
-        await update.message.reply_text("⚠️ کانال مبدأ هنوز تنظیم نشده است!\n\nلطفاً از دستور زیر استفاده کنید:\n/set_source_channel - تنظیم کانال مبدأ")
+    if not source_channels:
+        await update.message.reply_text("⚠️ هیچ کانال مبدأیی اضافه نشده است!\n\nلطفاً از دستور زیر استفاده کنید:\n/set_source_channel - تنظیم کانال مبدأ")
         return
     
     # بررسی فایل کرالر
@@ -559,7 +642,7 @@ async def run_crawler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             content = file.read()
             
             # بروزرسانی تنظیمات کرالر در فایل
-            if await update_crawler_settings(source=source_channel, target=target_channel):
+            if await update_crawler_settings(source=source_channels):
                 await update.message.reply_text("✅ تنظیمات کرالر در فایل بروزرسانی شد.")
             else:
                 await update.message.reply_text("❌ خطا در بروزرسانی تنظیمات کرالر در فایل!")
@@ -576,7 +659,11 @@ async def run_crawler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     otp_user_id = update.effective_user.id
     waiting_for_otp = True
     
-    await update.message.reply_text("🔄 در حال اجرای کرالر...\n\nلطفاً کد OTP را که به شماره تلفن شما ارسال شده وارد کنید.\n\nکانال مبدأ: " + source_channel + "\nکانال مقصد: " + target_channel)
+    await update.message.reply_text(
+        "🔄 در حال اجرای کرالر...\n\nلطفاً کد OTP را که به شماره تلفن شما ارسال شده وارد کنید.\n\nکانال مبدأ: " + 
+        ", ".join(source_channels) + 
+        "\nکانال مقصد: " + (target_channel if target_channel else "تنظیم نشده")
+    )
     
     # شروع کرالر به صورت زیرپروسس
     try:
@@ -627,7 +714,7 @@ def run_crawler_thread(update, context):
 
 
 async def handle_otp_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """پردازش کد OTP ارسال شده توسط کاربر"""
+    """Handle OTP verification message"""
     global waiting_for_otp, otp_user_id
     
     # اگر منتظر OTP نیستیم یا کاربر متفاوت است، پردازش نکن
@@ -641,26 +728,38 @@ async def handle_otp_message(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
     
     await update.message.reply_text(f"دریافت کد تأیید: {otp_code}")
-    waiting_for_otp = False
     
     try:
         # ارسال OTP به کرالر
         response = requests.get(f'http://localhost:5000/verify_otp?otp={otp_code}')
         if response.status_code == 200:
-            await update.message.reply_text("✅ لاگین با موفقیت انجام شد. در حال فوروارد پیام‌ها...")
-            
-            # پیام‌ها در حال فوروارد شدن هستند، منتظر نتیجه می‌مانیم
-            if "Messages forwarded successfully" in response.json().get('message', ''):
-                await update.message.reply_text("✅ عملیات فوروارد با موفقیت انجام شد.")
-            else:
-                await update.message.reply_text("✅ عملیات فوروارد با موفقیت انجام شد.")
+            result = response.json()
+            if result.get('status') == 'error':
+                # اگر کد اشتباه بود، پیام خطا را نمایش بده و منتظر کد جدید بمان
+                await update.message.reply_text(result.get('message', 'کد تأیید اشتباه است. لطفاً دوباره تلاش کنید.'))
+                return
+            elif result.get('status') == 'info':
+                # اگر پیام خوانده نشده‌ای وجود نداشت
+                await update.message.reply_text(result.get('message', 'تمام پیام‌ها خوانده شده‌اند.'))
+                waiting_for_otp = False
+                return
+            elif result.get('status') == 'success':
+                # اگر کد درست بود، پیام موفقیت را نمایش بده و ادامه بده
+                await update.message.reply_text(result.get('message', 'ورود با موفقیت انجام شد. در حال فوروارد پیام‌ها...'))
+                waiting_for_otp = False
+                
+                # پیام‌ها در حال فوروارد شدن هستند، منتظر نتیجه می‌مانیم
+                if "Messages forwarded successfully" in result.get('message', ''):
+                    await update.message.reply_text("✅ عملیات فوروارد با موفقیت انجام شد.")
+                else:
+                    await update.message.reply_text("✅ عملیات فوروارد با موفقیت انجام شد.")
         else:
             error_message = response.json().get('error', 'خطای نامشخص')
             await update.message.reply_text(f"❌ خطا در تأیید OTP: {error_message}")
     except Exception as e:
         await update.message.reply_text(f"❌ خطا: {str(e)}")
 
-async def update_crawler_settings(source=None, target=None):
+async def update_crawler_settings(source=None, target=None, phone=None):
     """بروزرسانی تنظیمات کرالر در فایل main.py"""
     try:
         crawler_file_path = "telegram-crawler/main.py"
@@ -672,16 +771,16 @@ async def update_crawler_settings(source=None, target=None):
             content = file.read()
         
         if source:
-            # جستجوی الگو برای جایگزینی کانال مبدأ
-            source_pattern = r'SOURCE_CHANNEL\s*=\s*"@[^"]*"'
+            # جستجوی الگو برای جایگزینی کانال‌های مبدأ
+            source_pattern = r'SOURCE_CHANNELS\s*=\s*\[[^\]]*\]'
             if re.search(source_pattern, content):
-                content = re.sub(source_pattern, f'SOURCE_CHANNEL = "{source}"', content)
+                content = re.sub(source_pattern, f'SOURCE_CHANNELS = {source}', content)
             else:
-                print(f"Warning: Could not find SOURCE_CHANNEL pattern in crawler file")
+                print(f"Warning: Could not find SOURCE_CHANNELS pattern in crawler file")
                 # تلاش برای جایگزینی با الگوی دقیق
                 content = content.replace(
-                    'SOURCE_CHANNEL = "@BINNER_IRAN"',
-                    f'SOURCE_CHANNEL = "{source}"'
+                    'SOURCE_CHANNELS = []',
+                    f'SOURCE_CHANNELS = {source}'
                 )
         
         if target:
@@ -695,6 +794,19 @@ async def update_crawler_settings(source=None, target=None):
                 content = content.replace(
                     'TARGET_CHANNEL = "@amiralitesttesttestbotbotbot"',
                     f'TARGET_CHANNEL = "{target}"'
+                )
+                
+        if phone:
+            # جستجوی الگو برای جایگزینی شماره تلفن
+            phone_pattern = r'PHONE_NUMBER\s*=\s*"[^"]*"'
+            if re.search(phone_pattern, content):
+                content = re.sub(phone_pattern, f'PHONE_NUMBER = "{phone}"', content)
+            else:
+                print(f"Warning: Could not find PHONE_NUMBER pattern in crawler file")
+                # تلاش برای جایگزینی با الگوی دقیق
+                content = content.replace(
+                    'PHONE_NUMBER = None',
+                    f'PHONE_NUMBER = "{phone}"'
                 )
         
         with open(crawler_file_path, "w", encoding="utf-8") as file:
@@ -725,7 +837,6 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• /set_group یا /setgroup - تنظیم گروه هدف (باید در گروه ارسال شود)",
         "• /set_channel یا /setchannel - تنظیم کانال هدف (فوروارد پیام)",
         "• /set_source_channel - تنظیم کانال مبدأ برای کرالر",
-        "• /set_target_channel - تنظیم کانال مقصد کرالر (به صورت پیش‌فرض ربات فعلی)",
         "• /run - اجرای کرالر",
         "• /status - نمایش وضعیت فعلی ربات و تنظیمات آن"
     ]
@@ -761,10 +872,10 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # بررسی وضعیت کرالر
     status_info.append("\n📱 وضعیت کرالر:")
     
-    if source_channel:
-        status_info.append(f"✅ کانال مبدأ: {source_channel}")
+    if source_channels:
+        status_info.append(f"✅ کانال‌های مبدأ: {', '.join(source_channels)}")
     else:
-        status_info.append("❌ کانال مبدأ: تنظیم نشده - از دستور /set_source_channel استفاده کنید")
+        status_info.append("❌ کانال‌های مبدأ: تنظیم نشده - از دستور /set_source_channel استفاده کنید")
     
     if target_channel:
         status_info.append(f"✅ کانال مقصد: {target_channel}")
@@ -800,8 +911,9 @@ def main():
         application.add_handler(CommandHandler("setgroup", set_group), group=1)
         application.add_handler(CommandHandler("set_channel", set_channel), group=1)
         application.add_handler(CommandHandler("setchannel", set_channel), group=1)
+        application.add_handler(CommandHandler("set_phone_number", set_phone_number), group=1)
         application.add_handler(CommandHandler("set_source_channel", set_source_channel), group=1)
-        application.add_handler(CommandHandler("set_target_channel", set_target_channel), group=1)
+        application.add_handler(CommandHandler("done", done_command), group=1)
         application.add_handler(CommandHandler("run", run_crawler), group=1)
         application.add_handler(CommandHandler("status", status_command), group=1)
         application.add_handler(MessageHandler(filters.PHOTO, handle_photo), group=1)
