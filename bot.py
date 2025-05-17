@@ -1,10 +1,12 @@
 import os
+import asyncio
+import uuid
 import sqlite3
 import tempfile
 import requests
 from datetime import datetime
 from dotenv import load_dotenv
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, InputFile
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 from PIL import Image, ImageDraw
 import io
@@ -12,7 +14,10 @@ import subprocess
 import threading
 import time
 import re
-
+from PIL import Image
+from io import BytesIO
+from telegram import Update
+from telegram.ext import CallbackContext
 # Load environment variables
 load_dotenv()
 
@@ -25,7 +30,6 @@ if not TOKEN:
 target_group_id = None
 target_channel_id = None
 waiting_for_channel = False
-
 # متغیرهای مربوط به کرالر
 crawler_process = None
 waiting_for_otp = False
@@ -85,11 +89,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # "• /set_source_channel - تنظیم کانال‌های مبدأ (می‌توانید چند کانال اضافه کنید)",
         # "• /done - اتمام لیست کانال‌های مبدأ",
         "• /set_target_channel - تنظیم کانال مقصد (به صورت پیش‌فرض ربات فعلی)",
-        "• /run - اجرای کرالر",
-        "",
-        "🔍 دستورات مفید:",
-        "• /help - مشاهده همه دستورات",
-        "• /status - مشاهده وضعیت فعلی ربات"
+        "• /run - اجرای  کراولر"
     ]
     
     await update.message.reply_text("\n".join(welcome_message))
@@ -194,14 +194,22 @@ async def set_target_channel(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.message.reply_text("❌ خطا در بروزرسانی تنظیمات کرالر!")
         return
 
+async def delete_file_later(path, delay=10):
+    await asyncio.sleep(delay)
+    if os.path.exists(path):
+        os.remove(path)
+
 def create_main_keyboard():
     """Create the main inline keyboard with three buttons"""
     keyboard = [
         [
             InlineKeyboardButton("حذف واتر مارک", callback_data="remove_watermark"),
-            InlineKeyboardButton("تایید", callback_data="approve")
+            InlineKeyboardButton("کاهش کیفیت", callback_data="reduce_quality")
         ],
-        [InlineKeyboardButton("رد", callback_data="reject")]
+        [
+            InlineKeyboardButton("رد", callback_data="reject"),
+            InlineKeyboardButton("تایید", callback_data="approve"),
+         ]
     ]
     return InlineKeyboardMarkup(keyboard)
 
@@ -224,18 +232,25 @@ def create_watermark_keyboard():
     ]
     return InlineKeyboardMarkup(keyboard)
 
-def create_unit_keyboard():
-    """Create the unit selection keyboard (1-10)"""
+def create_unit_keyboard(direction="top"):
     keyboard = []
     row = []
     for i in range(1, 11):
-        row.append(InlineKeyboardButton(str(i), callback_data=f"unit_{i}"))
+        row.append(InlineKeyboardButton(str(i), callback_data=f"unit_{direction}_{i}"))
         if len(row) == 2:
             keyboard.append(row)
             row = []
     if row:
         keyboard.append(row)
     return InlineKeyboardMarkup(keyboard)
+
+def reduce_image_quality(input_image: BytesIO, quality: int = 30, save_path=None) -> str:
+    image = Image.open(input_image)
+    if not save_path:
+        save_path = os.path.join(TEMP_DIR, f"reduced_{uuid.uuid4().hex}.jpg")
+    image.save(save_path, format='JPEG', quality=quality)
+    return save_path
+
 def has_links(text):
     """Check if the text contains any links or usernames"""
     patterns = [
@@ -510,7 +525,31 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             # Delete from group
             await query.message.delete()
-    
+
+
+    elif query.data == "reduce_quality":
+        if query.message and query.message.photo:
+            photo = query.message.photo[-1]
+
+            file = await context.bot.get_file(photo.file_id)
+            photo_bytes = BytesIO()
+            await file.download_to_memory(out=photo_bytes)
+            photo_bytes.seek(0)
+
+            reduced_path = reduce_image_quality(photo_bytes, quality=30)
+
+            with open(reduced_path, 'rb') as f:
+                await query.message.edit_media(
+                    media=InputMediaPhoto(media=f),
+                    reply_markup=create_main_keyboard()
+                )
+
+            # اختیاری: حذف بعد از چند ثانیه
+            asyncio.create_task(delete_file_later(reduced_path))
+
+        else:
+            await query.message.reply_text("❗ لطفاً این دستور را روی یک پیام عکس ریپلای کنید.")
+ 
     elif query.data == "reject":
         # Just delete from group
         await query.message.delete()
@@ -554,61 +593,108 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Return to main keyboard
         await query.message.edit_reply_markup(reply_markup=create_main_keyboard())
     
-    elif query.data in ["from_top", "from_bottom"]:
-        # Get original photo
+    elif query.data in ["from_top"]:
         c.execute('SELECT original_photo_path FROM messages WHERE message_id = ?', (query.message.message_id,))
         result = c.fetchone()
-        if result:
-            # Create divided image
+        if result and os.path.exists(result[0]):
             img = Image.open(result[0])
             draw = ImageDraw.Draw(img)
             width, height = img.size
             for i in range(1, 10):
                 y = int(height * i / 10)
                 draw.line([(0, y), (width, y)], fill='red', width=2)
-            
-            # Save divided image
+
             divided_path = os.path.join(TEMP_DIR, f"divided_{query.message.message_id}.jpg")
             img.save(divided_path)
-            
-            # Update message with divided image and unit selection keyboard
-            await query.message.edit_media(
-                media=InputMediaPhoto(media=open(divided_path, 'rb')),
-                reply_markup=create_unit_keyboard()
-            )
-    
-    elif query.data.startswith("unit_"):
-        unit = int(query.data.split("_")[1])
-        # Get original photo
+
+            with open(divided_path, 'rb') as f:
+                await query.message.edit_media(
+                    media=InputMediaPhoto(media=f),
+                    reply_markup=create_unit_keyboard()
+                )
+        else:
+            await query.message.reply_text("❗ فایل تصویر پیدا نشد.")
+
+    elif query.data in ["from_bottom"]:
         c.execute('SELECT original_photo_path FROM messages WHERE message_id = ?', (query.message.message_id,))
         result = c.fetchone()
-        if result:
-            # Crop image based on selected unit
+        if result and os.path.exists(result[0]):
+            img = Image.open(result[0])
+            draw = ImageDraw.Draw(img)
+            width, height = img.size
+            for i in range(10, 0):  # حلقه اصلاح‌شده
+                y = int(height * i / 10)
+                draw.line([(0, y), (width, y)], fill='red', width=2)
+
+            divided_path = os.path.join(TEMP_DIR, f"divided_{query.message.message_id}.jpg")
+            img.save(divided_path)
+
+            with open(divided_path, 'rb') as f:
+                await query.message.edit_media(
+                    media=InputMediaPhoto(media=f),
+                    reply_markup=create_unit_keyboard()
+                )
+        else:
+            await query.message.reply_text("❗ فایل تصویر پیدا نشد.")
+            c.execute('SELECT original_photo_path FROM messages WHERE message_id = ?', (query.message.message_id,))
+            result = c.fetchone()
+            if result:
+                # Create divided image
+                img = Image.open(result[0])
+                draw = ImageDraw.Draw(img)
+                width, height = img.size
+                for i in range(10, 1, -1):
+                    y = int(height * i / 10)
+                    draw.line([(0, y), (width, y)], fill='red', width=2)
+                
+                # Save divided image
+                divided_path = os.path.join(TEMP_DIR, f"divided_{query.message.message_id}.jpg")
+                img.save(divided_path)
+                
+                # Update message with divided image and unit selection keyboard
+                await query.message.edit_media(
+                    media=InputMediaPhoto(media=open(divided_path, 'rb')),
+                    reply_markup=create_unit_keyboard()
+                )
+    
+    elif query.data.startswith("unit_"):
+        parts = query.data.split("_")
+        if len(parts) != 3:
+            await query.message.reply_text("خطا در داده ورودی.")
+            return
+
+        direction = parts[1]
+        unit = int(parts[2])
+
+        c.execute('SELECT original_photo_path FROM messages WHERE message_id = ?', (query.message.message_id,))
+        result = c.fetchone()
+        if result and os.path.exists(result[0]):
             img = Image.open(result[0])
             width, height = img.size
             crop_height = height // 10
-            
-            if query.data == "from_top":
+
+            if direction == "top":
                 cropped = img.crop((0, 0, width, unit * crop_height))
-            else:  # from bottom
-                # Remove units from bottom
-                cropped = img.crop((0, 0, width, height - (unit * crop_height)))
-            
-            # Save cropped image
+            else:
+                cropped = img.crop((0, height - (unit * crop_height), width, height))
+
             cropped_path = os.path.join(TEMP_DIR, f"cropped_{query.message.message_id}.jpg")
             cropped.save(cropped_path)
-            
-            # Update database with cropped image path
+
             c.execute('UPDATE messages SET photo_path = ? WHERE message_id = ?', 
-                     (cropped_path, query.message.message_id))
+                    (cropped_path, query.message.message_id))
             conn.commit()
-            
-            # Update message with cropped image and main keyboard
+
+        
             await query.message.edit_media(
-                media=InputMediaPhoto(media=open(cropped_path, 'rb')),
+                media=InputMediaPhoto(media=open(cropped_path,'rb')),
                 reply_markup=create_main_keyboard()
             )
-    
+        else:
+            await query.message.reply_text("❗ فایل تصویر پیدا نشد.")
+
+
+        
     conn.close()
 
 async def run_crawler(update: Update, context: ContextTypes.DEFAULT_TYPE):
